@@ -28,7 +28,7 @@ jobs:
   build:
     name: Build & Push
     needs: test
-    runs-on: docker
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
@@ -38,12 +38,12 @@ jobs:
 
       - name: Build and push
         run: |
-          REGISTRY="git.gddnet.io"
-          IMAGE="${REGISTRY}/${{ github.repository }}"
+          REGISTRY="ghcr.io"
+          IMAGE="${REGISTRY}/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
           TAG="${{ github.ref_name }}"
           MINOR="$(echo "$TAG" | sed 's/^v//; s/\.[^.]*$//')"
 
-          echo "${{ secrets.REGISTRY_TOKEN }}" | \
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
             docker login "$REGISTRY" -u "${{ github.actor }}" --password-stdin
 
           docker build \
