@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+jobs:
+  # ── 1. Test ──────────────────────────────────────────────────────────────────
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test -race -count=1 ./...
+
+  # ── 2. Build & push image ────────────────────────────────────────────────────
+  build:
+    name: Build & Push
+    needs: test
+    runs-on: docker
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and push
+        run: |
+          REGISTRY="git.gddnet.io"
+          IMAGE="${REGISTRY}/${{ github.repository }}"
+          TAG="${{ github.ref_name }}"
+          MINOR="$(echo "$TAG" | sed 's/^v//; s/\.[^.]*$//')"
+
+          echo "${{ secrets.REGISTRY_TOKEN }}" | \
+            docker login "$REGISTRY" -u "${{ github.actor }}" --password-stdin
+
+          docker build \
+            --build-arg VERSION="$TAG" \
+            -t "$IMAGE:$TAG" \
+            -t "$IMAGE:$MINOR" \
+            -t "$IMAGE:latest" \
+            .
+
+          docker push "$IMAGE:$TAG"
+          docker push "$IMAGE:$MINOR"
+          docker push "$IMAGE:latest"
