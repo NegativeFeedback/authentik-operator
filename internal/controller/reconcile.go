@@ -107,12 +107,15 @@ func (s *Shared) Reconcile(ctx context.Context, obj client.Object, t *target.Tar
 	}
 
 	appPK, err := s.Authentik.UpsertApplication(ctx, authentik.ApplicationParams{
-		Slug:        spec.Slug,
-		Name:        spec.Name,
-		Category:    spec.Category,
-		Icon:        spec.Icon,
-		Description: spec.Description,
-		ProviderPK:  providerPK,
+		Slug:         spec.Slug,
+		Name:         spec.Name,
+		Category:     spec.Category,
+		Icon:         spec.Icon,
+		Description:  spec.Description,
+		Publisher:    spec.Publisher,
+		OpenInNewTab: spec.OpenInNewTab,
+		LaunchURL:    launchURL(t, spec),
+		ProviderPK:   providerPK,
 	})
 	if err != nil {
 		return fmt.Errorf("upserting application %q: %w", spec.Slug, err)
@@ -288,6 +291,27 @@ func (s *Shared) deleteProxyRoute(ctx context.Context, t *target.Target) error {
 		return fmt.Errorf("deleting proxy route %s/%s: %w", s.AuthentikNamespace, route.Name, err)
 	}
 	return nil
+}
+
+// launchURL resolves the Application's launch URL: an explicit
+// authentik.gddnet.io/url annotation always wins; otherwise it's derived per
+// mode so app tiles are clickable without any extra configuration.
+func launchURL(t *target.Target, spec *annotations.Spec) string {
+	if spec.URL != "" {
+		return spec.URL
+	}
+	switch spec.Mode {
+	case annotations.ModeProxy:
+		// The resource's own hostname is often Tailscale-only (that's the
+		// whole point of proxy mode); the proxy hostname is what's actually
+		// publicly reachable.
+		return annotations.DefaultLaunchURL(spec.Proxy.Hostname)
+	default:
+		if len(t.Hostnames) > 0 {
+			return annotations.DefaultLaunchURL(t.Hostnames[0])
+		}
+		return ""
+	}
 }
 
 func ownerRef(t *target.Target) metav1.OwnerReference {

@@ -71,11 +71,14 @@ func (c *Client) flowPK(ctx context.Context, slug string) (string, error) {
 
 // ApplicationParams is the desired state of an Authentik Application.
 type ApplicationParams struct {
-	Slug        string
-	Name        string
-	Category    string
-	Icon        string
-	Description string
+	Slug         string
+	Name         string
+	Category     string
+	Icon         string
+	Description  string
+	Publisher    string
+	LaunchURL    string
+	OpenInNewTab bool
 	// ProviderPK is nil for blank-mode applications.
 	ProviderPK *int32
 }
@@ -120,6 +123,13 @@ func applyApplicationOptional(req *api.ApplicationRequest, p ApplicationParams) 
 	if p.Description != "" {
 		req.MetaDescription = &p.Description
 	}
+	if p.Publisher != "" {
+		req.MetaPublisher = &p.Publisher
+	}
+	if p.LaunchURL != "" {
+		req.MetaLaunchUrl = &p.LaunchURL
+	}
+	req.OpenInNewTab = &p.OpenInNewTab
 	if p.ProviderPK != nil {
 		req.SetProvider(*p.ProviderPK)
 	} else {
@@ -137,6 +147,13 @@ func applyPatchedApplicationOptional(req *api.PatchedApplicationRequest, p Appli
 	if p.Description != "" {
 		req.MetaDescription = &p.Description
 	}
+	if p.Publisher != "" {
+		req.MetaPublisher = &p.Publisher
+	}
+	if p.LaunchURL != "" {
+		req.MetaLaunchUrl = &p.LaunchURL
+	}
+	req.OpenInNewTab = &p.OpenInNewTab
 	if p.ProviderPK != nil {
 		req.SetProvider(*p.ProviderPK)
 	} else {
@@ -182,6 +199,11 @@ func (c *Client) UpsertOAuth2Provider(ctx context.Context, name string, redirect
 
 	uris := toRedirectURIRequests(redirectURIs)
 	ct := api.ClientTypeEnum(clientType)
+	// Authentik doesn't default this to anything usable via the API (unlike
+	// the UI wizard): leaving it unset creates a provider that rejects the
+	// authorization_code flow entirely ("Invalid grant_type for provider" at
+	// the /authorize/ endpoint).
+	grantTypes := []api.GrantTypesEnum{api.GRANTTYPESENUM_AUTHORIZATION_CODE, api.GRANTTYPESENUM_REFRESH_TOKEN}
 
 	existing, err := c.findOAuth2ProviderByName(ctx, name)
 	if err != nil {
@@ -194,6 +216,7 @@ func (c *Client) UpsertOAuth2Provider(ctx context.Context, name string, redirect
 			AuthorizationFlow: authFlow,
 			InvalidationFlow:  invFlow,
 			ClientType:        &ct,
+			GrantTypes:        grantTypes,
 			RedirectUris:      uris,
 		}
 		created, _, err := c.api.ProvidersAPI.ProvidersOauth2Create(ctx).OAuth2ProviderRequest(req).Execute()
@@ -208,6 +231,7 @@ func (c *Client) UpsertOAuth2Provider(ctx context.Context, name string, redirect
 		AuthorizationFlow: &authFlow,
 		InvalidationFlow:  &invFlow,
 		ClientType:        &ct,
+		GrantTypes:        grantTypes,
 		RedirectUris:      uris,
 	}
 	updated, _, err := c.api.ProvidersAPI.ProvidersOauth2PartialUpdate(ctx, existing.Pk).PatchedOAuth2ProviderRequest(patch).Execute()

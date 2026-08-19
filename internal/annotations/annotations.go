@@ -18,6 +18,9 @@ const (
 	KeyCategory      = Prefix + "category"
 	KeyIcon          = Prefix + "icon"
 	KeyDescription   = Prefix + "description"
+	KeyURL           = Prefix + "url"
+	KeyPublisher     = Prefix + "publisher"
+	KeyOpenInNewTab  = Prefix + "open-in-new-tab"
 	KeyAllowedGroups = Prefix + "allowed-groups"
 
 	KeyOAuthRedirectURIs = Prefix + "oauth-redirect-uris"
@@ -64,13 +67,20 @@ type ProxySpec struct {
 // Spec is the parsed, defaulted, and validated form of the annotation set on
 // a single Ingress or HTTPRoute.
 type Spec struct {
-	Enabled       bool
-	Mode          Mode
-	Name          string
-	Slug          string
-	Category      string
-	Icon          string
-	Description   string
+	Enabled      bool
+	Mode         Mode
+	Name         string
+	Slug         string
+	Category     string
+	Icon         string
+	Description  string
+	Publisher    string
+	OpenInNewTab bool
+	// URL is the explicit launch URL override (authentik.gddnet.io/url). When
+	// empty, the caller derives a sane per-mode default from the resource's
+	// hostnames (see reconcile.go) rather than leaving the app tile
+	// unclickable.
+	URL           string
 	AllowedGroups []string
 
 	OAuth OAuthSpec
@@ -93,14 +103,18 @@ func Parse(resourceName string, ann map[string]string) (*Spec, error) {
 		return &Spec{Enabled: false, Slug: slug}, nil
 	}
 
+	openInNewTab, _ := strconv.ParseBool(ann[KeyOpenInNewTab])
 	s := &Spec{
-		Enabled:     true,
-		Mode:        Mode(ann[KeyMode]),
-		Name:        defaultString(ann[KeyName], resourceName),
-		Slug:        slug,
-		Category:    ann[KeyCategory],
-		Icon:        ann[KeyIcon],
-		Description: ann[KeyDescription],
+		Enabled:      true,
+		Mode:         Mode(ann[KeyMode]),
+		Name:         defaultString(ann[KeyName], resourceName),
+		Slug:         slug,
+		Category:     ann[KeyCategory],
+		Icon:         ann[KeyIcon],
+		Description:  ann[KeyDescription],
+		Publisher:    ann[KeyPublisher],
+		OpenInNewTab: openInNewTab,
+		URL:          ann[KeyURL],
 	}
 
 	switch s.Mode {
@@ -189,6 +203,13 @@ func parseProxy(ann map[string]string) (*ProxySpec, error) {
 // hostname when the user didn't specify authentik.gddnet.io/oauth-redirect-uris.
 func DefaultOAuthRedirectURI(hostname string) RedirectURI {
 	return RedirectURI{MatchingMode: "regex", URL: fmt.Sprintf("https://%s/.*", hostname)}
+}
+
+// DefaultLaunchURL builds the zero-config fallback launch URL for a hostname
+// when the user didn't specify authentik.gddnet.io/url, so app tiles are
+// clickable out of the box.
+func DefaultLaunchURL(hostname string) string {
+	return fmt.Sprintf("https://%s/", hostname)
 }
 
 func defaultString(v, def string) string {
