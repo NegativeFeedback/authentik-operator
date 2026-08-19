@@ -24,12 +24,33 @@ const (
 	InvalidationFlowSlug  = "default-provider-invalidation-flow"
 )
 
+// DefaultSigningKeyName is the certificate Authentik provisions on install
+// and defaults to when creating an OAuth2 Provider through its own UI.
+// Without an explicit signing_key, Authentik has no RSA key to publish, so
+// /jwks/ serves `{}` (no "keys" field at all) instead of a real key set —
+// OIDC client libraries that parse the ID token's JWKS (authlib, used by
+// Open WebUI, among others) then fail with "Invalid key set format".
+const DefaultSigningKeyName = "authentik Self-signed Certificate"
+
+// defaultOAuth2ScopeMappings are the built-in Scope Mappings Authentik's own
+// UI wizard attaches automatically when creating an OAuth2 Provider. Without
+// them, the provider has zero grantable scopes: the access token comes back
+// with an empty scope set no matter what the client requested, and anything
+// scope-gated (like /userinfo/) 403s.
+var defaultOAuth2ScopeMappings = []string{
+	"goauthentik.io/providers/oauth2/scope-openid",
+	"goauthentik.io/providers/oauth2/scope-email",
+	"goauthentik.io/providers/oauth2/scope-profile",
+}
+
 type Client struct {
 	api   *api.APIClient
 	token string
 
-	mu        sync.Mutex
-	flowCache map[string]string
+	mu                  sync.Mutex
+	flowCache           map[string]string
+	signingKeyPKOnce    string
+	scopeMappingPKsOnce []string
 }
 
 func New(baseURL, token string) *Client {
@@ -67,6 +88,57 @@ func (c *Client) flowPK(ctx context.Context, slug string) (string, error) {
 	c.flowCache[slug] = pk
 	c.mu.Unlock()
 	return pk, nil
+}
+
+func (c *Client) signingKeyPK(ctx context.Context) (string, error) {
+	c.mu.Lock()
+	if c.signingKeyPKOnce != "" {
+		pk := c.signingKeyPKOnce
+		c.mu.Unlock()
+		return pk, nil
+	}
+	c.mu.Unlock()
+
+	resp, _, err := c.api.CryptoAPI.CryptoCertificatekeypairsList(c.authCtx(ctx)).Name(DefaultSigningKeyName).Execute()
+	if err != nil {
+		return "", fmt.Errorf("looking up signing key %q: %w", DefaultSigningKeyName, err)
+	}
+	if len(resp.Results) == 0 {
+		return "", fmt.Errorf("signing key %q not found", DefaultSigningKeyName)
+	}
+	pk := resp.Results[0].Pk
+
+	c.mu.Lock()
+	c.signingKeyPKOnce = pk
+	c.mu.Unlock()
+	return pk, nil
+}
+
+func (c *Client) defaultScopeMappingPKs(ctx context.Context) ([]string, error) {
+	c.mu.Lock()
+	if c.scopeMappingPKsOnce != nil {
+		pks := c.scopeMappingPKsOnce
+		c.mu.Unlock()
+		return pks, nil
+	}
+	c.mu.Unlock()
+
+	resp, _, err := c.api.PropertymappingsAPI.PropertymappingsProviderScopeList(c.authCtx(ctx)).Managed(defaultOAuth2ScopeMappings).Execute()
+	if err != nil {
+		return nil, fmt.Errorf("looking up default scope mappings: %w", err)
+	}
+	if len(resp.Results) != len(defaultOAuth2ScopeMappings) {
+		return nil, fmt.Errorf("expected %d default scope mappings, found %d", len(defaultOAuth2ScopeMappings), len(resp.Results))
+	}
+	pks := make([]string, len(resp.Results))
+	for i, m := range resp.Results {
+		pks[i] = m.Pk
+	}
+
+	c.mu.Lock()
+	c.scopeMappingPKsOnce = pks
+	c.mu.Unlock()
+	return pks, nil
 }
 
 // ApplicationParams is the desired state of an Authentik Application.
@@ -196,6 +268,14 @@ func (c *Client) UpsertOAuth2Provider(ctx context.Context, name string, redirect
 	if err != nil {
 		return nil, err
 	}
+	signingKey, err := c.signingKeyPK(ctx)
+	if err != nil {
+		return nil, err
+	}
+	scopeMappings, err := c.defaultScopeMappingPKs(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	uris := toRedirectURIRequests(redirectURIs)
 	ct := api.ClientTypeEnum(clientType)
@@ -217,8 +297,10 @@ func (c *Client) UpsertOAuth2Provider(ctx context.Context, name string, redirect
 			InvalidationFlow:  invFlow,
 			ClientType:        &ct,
 			GrantTypes:        grantTypes,
+			PropertyMappings:  scopeMappings,
 			RedirectUris:      uris,
 		}
+		req.SetSigningKey(signingKey)
 		created, _, err := c.api.ProvidersAPI.ProvidersOauth2Create(ctx).OAuth2ProviderRequest(req).Execute()
 		if err != nil {
 			return nil, fmt.Errorf("creating oauth2 provider %q: %w", name, err)
@@ -232,8 +314,10 @@ func (c *Client) UpsertOAuth2Provider(ctx context.Context, name string, redirect
 		InvalidationFlow:  &invFlow,
 		ClientType:        &ct,
 		GrantTypes:        grantTypes,
+		PropertyMappings:  scopeMappings,
 		RedirectUris:      uris,
 	}
+	patch.SetSigningKey(signingKey)
 	updated, _, err := c.api.ProvidersAPI.ProvidersOauth2PartialUpdate(ctx, existing.Pk).PatchedOAuth2ProviderRequest(patch).Execute()
 	if err != nil {
 		return nil, fmt.Errorf("updating oauth2 provider %q: %w", name, err)
